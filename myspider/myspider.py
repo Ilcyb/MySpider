@@ -1,10 +1,12 @@
 from json import dump, load
+from os.path import join
+import queue
 
 import requests
 from bs4 import BeautifulSoup
 
 from myspider.exceptions import SpiderError, LoadCookiesError, SaveCookiesError
-from myspider.utils import FetchType
+from myspider.utils import FetchType, mymd5
 
 
 class MySpider:
@@ -26,6 +28,8 @@ class MySpider:
             self.setCookies(cookies)
         if proxy:
             self.setProxy(proxy)
+        self.__next_urls = queue.Queue()
+        self.__put_start_urls_to_next()
 
     def setHeader(self, headers):
         """set headers of session
@@ -155,22 +159,88 @@ class MySpider:
         """
         pass
 
-    def fetchImage(self,
-                   parent_element_id=None,
-                   parrent_element_class=None,
-                   next_page_element_id=None,
-                   next_page_element_class=None):
+    def fetchImage(
+            self,
+            image_save_path,
+            parent_element_id=None,
+            parrent_element_class=None,
+            next_page_element_id=None,
+            next_page_element_class=None,
+    ):
         """MySpider automatically grabs images.
 
         MySpider automatically grabs the img element in the parent element of
         the parent_element_id and parent_element_class lists
 
         Args:
-            parent_element_id: The id of the image tag to grab.
-            parrent_element_class: The class name of the image tag to grab.
-            next_page_element_id: The id of the next page link.
-            next_page_element_class: The class of the next page link.
+            image_save_path: directory path for storing pictures.
+            parent_element_id: The id list of the image tag to grab.
+            parrent_element_class: The class name list of the image tag to grab.
+            next_page_element_id: The id list of the next page link.
+            next_page_element_class: The class list of the next page link.
         """
+        while True:
+            url = self.__next_urls.get()
+            response = self.__request_get(url)
+            self.__fetchImage(
+                response.text,
+                r'C:\Users\hybma\Pictures\爬取图片',
+                parent_element_id=parent_element_id,
+                parrent_element_class=parrent_element_class,
+                next_page_element_id=next_page_element_id,
+                next_page_element_class=next_page_element_class)
+
+    def __fetchImage(self,
+                     page_content,
+                     save_path,
+                     parent_element_id=None,
+                     parrent_element_class=None,
+                     next_page_element_id=None,
+                     next_page_element_class=None):
+        page_doc = BeautifulSoup(page_content, "html.parser")
+
+        parent_elements = page_doc.find_all(attrs={
+            "class": parrent_element_class
+        }) if parrent_element_class != None else []
+        parent_elements += page_doc.find_all(attrs={
+            "id": parent_element_id
+        }) if parent_element_id != None else []
+
+        next_elements = page_doc.find_all(attrs={
+            "class": next_page_element_class
+        }) if next_page_element_class != None else []
+        next_elements += page_doc.find_all(attrs={
+            "id": next_page_element_id
+        }) if next_page_element_id != None else []
+
+        img_urls = list()
+        for element in parent_elements:
+            img_elements = element.find_all('img')
+            for img_element in img_elements:
+                img_urls.append(img_element['src'])
+
+        next_urls = list()
+        for element in next_elements:
+            url_elements = element.find_all('a')
+            for url_element in url_elements:
+                next_urls.append(url_element['href'])
+
+        self.__add_url_to_next(next_urls)
+        self.__save_imgs_to_local(save_path, img_urls)
+
+    def __save_imgs_to_local(self, save_path, url_list):
+        for url in url_list:
+            self.__save_img_to_local(save_path, url)
+
+    def __save_img_to_local(self, save_path, url):
+        img_response = self.__request_get(url)
+        complete_path = join(save_path, mymd5(url)) + '.jpg'
+        with open(complete_path, 'wb') as img_f:
+            img_f.write(img_response.content)
+
+    def __add_url_to_next(self, url_list):
+        for url in url_list:
+            self.__next_urls.put(url)
 
     def start(self):
         """start spider.
@@ -179,7 +249,9 @@ class MySpider:
     def __request_get(self, url, data=None):
         try:
             response = self.__session.get(
-                url, data=data, headers=self.__headers, proxies=self.__proxy)
+                url, data=data,
+                headers=self.__headers if hasattr(self, '__headers') else None,
+                proxies=self.__proxy if hasattr(self, '__proxy') else None)
             response.raise_for_status()
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.HTTPError) as e:
@@ -188,3 +260,7 @@ class MySpider:
             print(e)
         else:
             return response
+
+    def __put_start_urls_to_next(self):
+        for url in self.__start_urls:
+            self.__next_urls.put(url)
