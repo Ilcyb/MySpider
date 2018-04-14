@@ -2,6 +2,7 @@ from json import dump, load
 from os.path import join, exists, isdir
 from os import makedirs
 from logging import DEBUG, INFO, WARN, ERROR, CRITICAL
+from urllib.parse import urljoin
 import queue
 
 import requests
@@ -222,13 +223,13 @@ class MySpider:
             next_page_element_class=next_page_element_class)
 
     def __fetchImage(self,
-                     page_content,
+                     response,
                      save_path,
                      parent_element_id=None,
                      parrent_element_class=None,
                      next_page_element_id=None,
                      next_page_element_class=None):
-        page_doc = BeautifulSoup(page_content, "html.parser")
+        page_doc = BeautifulSoup(response.text, "html.parser")
 
         parent_elements = page_doc.find_all(
             attrs={"class": parrent_element_class
@@ -258,7 +259,7 @@ class MySpider:
             for url_element in url_elements:
                 href = url_element.get('href')
                 if href is not None:
-                    next_urls.append(href)
+                    next_urls.append(urljoin(response.url, href))
 
         self.__add_url_to_next(next_urls)
         self.__save_imgs_to_local(save_path, img_urls)
@@ -313,8 +314,12 @@ class MySpider:
     def __take_out_url_and_get_response_and_execute_function(
             self, func, *args, **kwargs):
         while True:
-            url = self.__next_urls.get()
-            response = self.__request_get(url)
-            args = list(args)
-            args.insert(0, response.text)
-            func(*args, **kwargs)
+            try:
+                url = self.__next_urls.get()
+                response = self.__request_get(url)
+                args_copy = list(args)
+                args_copy.insert(0, response)
+                func(*args_copy, **kwargs)
+            except Exception as e:
+                log(e, WARN)
+
