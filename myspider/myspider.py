@@ -1,12 +1,16 @@
 from json import dump, load
-from os.path import join
+from os.path import join, exists, isdir
+from os import makedirs
+from logging import DEBUG, INFO, WARN, ERROR, CRITICAL
 import queue
 
 import requests
 from bs4 import BeautifulSoup
 
-from myspider.exceptions import SpiderError, LoadCookiesError, SaveCookiesError
+from myspider.exceptions import SpiderError, LoadCookiesError, SaveCookiesError, DirectoryNotExistsError, \
+    NotDirectoryError
 from myspider.utils import FetchType, mymd5
+from myspider.logger import log
 
 
 class MySpider:
@@ -16,20 +20,27 @@ class MySpider:
                  headers=None,
                  cookies=None,
                  proxy=None):
-        self.__session = requests.session()
-        if not start_urls:
-            raise SpiderError('MySpider don\'t have start urls.')
-        self.setStartUrl(start_urls)
-        if allow_domains:
-            self.setAllowDomain(allow_domains)
-        if headers:
-            self.setHeader(headers)
-        if cookies:
-            self.setCookies(cookies)
-        if proxy:
-            self.setProxy(proxy)
-        self.__next_urls = queue.Queue()
-        self.__put_start_urls_to_next()
+        try:
+            self.__session = requests.session()
+            if not start_urls:
+                raise SpiderError('MySpider don\'t have start urls.')
+            self.setStartUrl(start_urls)
+            if allow_domains:
+                self.setAllowDomain(allow_domains)
+            if headers:
+                self.setHeader(headers)
+            if cookies:
+                self.setCookies(cookies)
+            if proxy:
+                self.setProxy(proxy)
+            self.__next_urls = queue.Queue()
+            self.__put_start_urls_to_next()
+        except (ValueError, SpiderError) as e:
+            log(e, ERROR)
+            exit()
+        except Exception as e:
+            from traceback import print_exc
+            print_exc()
 
     def setHeader(self, headers):
         """set headers of session
@@ -46,7 +57,7 @@ class MySpider:
 
     def getHeader(self):
         """get headers of session
-        
+
         Returns:
             A dict contain session's headers.
         """
@@ -92,7 +103,7 @@ class MySpider:
 
     def loadCookiesFromFile(self, filepath):
         """load cookie to session from file
-        
+
         Args:
             filepath: The file path to load the cookie.
 
@@ -112,7 +123,7 @@ class MySpider:
 
         Args:
             proxy: A dict, like {"http": "http://10.10.1.10:3128"}.
-        
+
         Raises:
             ValueError: An error occurred when proxy not a dict.
         """
@@ -127,10 +138,9 @@ class MySpider:
             urls: A list of urls.
 
         Raises:
-            ValueError: An error occurred when urls not a list.
+            ValueError: An error occurred when urls not a list or a string that can be converted to a list.
         """
-        if not isinstance(urls, list):
-            raise ValueError('start_urls must be a dict')
+        urls = self.__check_is_list_or_can_convert2list(urls, 'urls')
         self.__start_urls = urls
 
     def setAllowDomain(self, domain_list):
@@ -142,8 +152,8 @@ class MySpider:
         Raises:
             ValueError: An error occurred when domain_list not a list.
         """
-        if not isinstance(domain_list, list):
-            raise ValueError('domain_list must be a dict')
+        domain_list = self.__check_is_list_or_can_convert2list(
+            domain_list, 'domain_list')
         self.__allow_domain = domain_list
 
     def getAllowDomain(self):
@@ -179,16 +189,37 @@ class MySpider:
             next_page_element_id: The id list of the next page link.
             next_page_element_class: The class list of the next page link.
         """
-        while True:
-            url = self.__next_urls.get()
-            response = self.__request_get(url)
-            self.__fetchImage(
-                response.text,
-                r'C:\Users\hybma\Pictures\爬取图片',
-                parent_element_id=parent_element_id,
-                parrent_element_class=parrent_element_class,
-                next_page_element_id=next_page_element_id,
-                next_page_element_class=next_page_element_class)
+
+        if not exists(image_save_path):
+            makedirs(image_save_path)
+            log('The directory pointed to by img_save_path does not exist. \
+            The directory has been automatically created.')
+
+        if not isdir(image_save_path):
+            raise NotDirectoryError(
+                'The path pointed to by img_save_path not a directory')
+
+        all_none_flag = True
+        for name, param in {
+            'parent_element_id': parent_element_id, 
+            'parrent_element_class': parrent_element_class, 
+            'next_page_element_id': next_page_element_id,
+            'next_page_element_class': next_page_element_class
+        }.items():
+            if param is not None:
+                param = self.__check_is_list_or_can_convert2list(param, name)
+                all_none_flag = False
+
+        if all_none_flag:
+            raise SpiderError('missing enough parameters to fetch image')
+
+        self.__take_out_url_and_get_response_and_execute_function(
+            self.__fetchImage,
+            image_save_path,
+            parent_element_id=parent_element_id,
+            parrent_element_class=parrent_element_class,
+            next_page_element_id=next_page_element_id,
+            next_page_element_class=next_page_element_class)
 
     def __fetchImage(self,
                      page_content,
@@ -199,31 +230,35 @@ class MySpider:
                      next_page_element_class=None):
         page_doc = BeautifulSoup(page_content, "html.parser")
 
-        parent_elements = page_doc.find_all(attrs={
-            "class": parrent_element_class
-        }) if parrent_element_class != None else []
-        parent_elements += page_doc.find_all(attrs={
-            "id": parent_element_id
-        }) if parent_element_id != None else []
+        parent_elements = page_doc.find_all(
+            attrs={"class": parrent_element_class
+                   }) if parrent_element_class != None else []
+        parent_elements += page_doc.find_all(
+            attrs={"id": parent_element_id
+                   }) if parent_element_id != None else []
 
-        next_elements = page_doc.find_all(attrs={
-            "class": next_page_element_class
-        }) if next_page_element_class != None else []
-        next_elements += page_doc.find_all(attrs={
-            "id": next_page_element_id
-        }) if next_page_element_id != None else []
+        next_elements = page_doc.find_all(
+            attrs={"class": next_page_element_class
+                   }) if next_page_element_class != None else []
+        next_elements += page_doc.find_all(
+            attrs={"id": next_page_element_id
+                   }) if next_page_element_id != None else []
 
         img_urls = list()
         for element in parent_elements:
             img_elements = element.find_all('img')
             for img_element in img_elements:
-                img_urls.append(img_element['src'])
+                src = img_element.get('src')
+                if src is not None:
+                    img_urls.append(src)
 
         next_urls = list()
         for element in next_elements:
             url_elements = element.find_all('a')
             for url_element in url_elements:
-                next_urls.append(url_element['href'])
+                href = url_element.get('href')
+                if href is not None:
+                    next_urls.append(href)
 
         self.__add_url_to_next(next_urls)
         self.__save_imgs_to_local(save_path, img_urls)
@@ -249,7 +284,8 @@ class MySpider:
     def __request_get(self, url, data=None):
         try:
             response = self.__session.get(
-                url, data=data,
+                url,
+                data=data,
                 headers=self.__headers if hasattr(self, '__headers') else None,
                 proxies=self.__proxy if hasattr(self, '__proxy') else None)
             response.raise_for_status()
@@ -264,3 +300,21 @@ class MySpider:
     def __put_start_urls_to_next(self):
         for url in self.__start_urls:
             self.__next_urls.put(url)
+
+    def __check_is_list_or_can_convert2list(self, target, name):
+        if not isinstance(target, list):
+            if not isinstance(target, str):
+                raise ValueError(
+                    '{} must be a list or a string that can be converted to a list'.
+                    format(name))
+            target = list(target)
+        return target
+
+    def __take_out_url_and_get_response_and_execute_function(
+            self, func, *args, **kwargs):
+        while True:
+            url = self.__next_urls.get()
+            response = self.__request_get(url)
+            args = list(args)
+            args.insert(0, response.text)
+            func(*args, **kwargs)

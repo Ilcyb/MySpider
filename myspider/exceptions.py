@@ -8,5 +8,14 @@ class SaveCookiesError(SpiderError):
 
 
 class LoadCookiesError(SpiderError):
-    """A load cookie error occureed"""
+    """A load cookie error occurred"""
+    pass
+
+
+class NotDirectoryError(SpiderError):
+    """A not directory error occurred"""
+    pass
+
+class DirectoryNotExistsError(SpiderError):
+    """A directory not exists error occurred"""
     pass
